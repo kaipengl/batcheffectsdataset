@@ -1,0 +1,567 @@
+
+
+### This markdown can be used to regenerate the figures in the usage notes
+## We did not read the datasets here. Please read the datasets into your environment from the "mainfigures.Rmd" file, including the NA.omit data
+
+## We refer to the datasets as the following:
+## A1 = A549/K562 DDA-PASEF 
+## A2 = A549/K562 diaPASEF 
+## B1 = HCC1806/HS578T DDA PASEF 
+## B2 = HCC1806/HS578T diaPASEF
+
+## Libraries
+```{r}
+library(tidyverse)
+library(reshape2)
+library(gPCA)
+library(imputeLCMD)
+library(pcaMethods)
+library(sva)
+```
+
+## Function to perform missing value simulation 
+```{r}
+#### MV simulation function 
+
+#three parameters: df = dataframe containing no missing values, #total = total missing %, mcar = MCAR % among the total, the remaining will be MNAR
+mv.sim<-function(df,total,mcar){ 
+  df2<-2^df
+  subdfhole=c()
+  for(number in 1:ncol(df2)){
+    #here generating MNAR
+    mis_prop=total-mcar
+    data_res = df2[,number]
+    a=data_res
+    if(mis_prop!=0){
+      cutoff = quantile(a, mis_prop,na.rm=T)
+      a[a< cutoff] = NA
+      data_res=a
+    }
+    #here generating MCAR
+    mis_prop=mcar
+    q=round(length(data_res)*mis_prop)
+    tmplis=which(!is.na(data_res))
+    mi = sample(tmplis, q)
+    data_res[mi] = NA
+    
+    subdfhole=cbind(subdfhole,data_res)
+  }
+  colnames(subdfhole)=colnames(df2)
+  
+  jid=c()
+  ### Which rows are completely NA
+  for(j in 1:nrow(subdfhole)){
+    tmp=subdfhole[j,]
+    ge=tmp[is.na(tmp)]
+    if(length(ge)==ncol(subdfhole))
+      jid=append(jid,j)
+  }
+  if (length(jid > 0)){
+    subdfhole <- subdfhole[-jid,]
+    df2 <- df2[-jid,]
+  }
+  rownames(subdfhole)<-rownames(df2)
+  
+  df2<-log(df2,base=2)
+  subdfhole<-log(subdfhole,base=2)
+  return(list(df2,subdfhole))
+}
+```
+
+## Functions to perform missing values imputation 
+```{r}
+#### The first set of impute functions for the following imputation methods 
+# "mean" ; "knn" ; "minprob" ; "qrilc" ; "RF"
+
+do.impute<-function(df,method,k=5){
+  set.seed(123) # set seed for reproducibility
+  require(imputeLCMD)
+  out_mat<-c()
+  
+  if (method=="mean"){
+    
+    global.imp<-df
+    for (i in 1:nrow(global.imp)){
+      global.imp[i,which(is.na(global.imp[i,]))]<-mean(global.imp[i,],na.rm=TRUE)
+    }
+    out_mat<-global.imp
+  }
+  
+  if (method=="knn"){
+
+    global.imp<-impute.knn(t(df), k=k, rowmax=0.99, colmax=0.99)
+    global.imp<-t(global.imp$data)
+    out_mat<-global.imp
+  }
+
+  if (method=="minprob"){
+
+    global.imp<-impute.MinProb(df)
+    out_mat<-global.imp
+  }
+  
+  if (method=="qrilc"){
+
+    global.imp<-impute.QRILC(df)
+    global.imp<-global.imp[[1]]
+    out_mat<-global.imp
+  }
+  
+  return(out_mat)
+}
+
+#### The second set of impute functions for the following imputation methods 
+# "LLS" ; "Median" 
+
+LLS_wrapper <- function(data) 
+{
+  data_raw = t(data)
+  result=llsImpute(data_raw, k = 50, correlation="pearson", allVariables=TRUE)
+  cbs = completeObs(result)
+  return(t(cbs))
+}
+
+Median_wrapper <- function(data) {
+  result = data
+  result = apply(result,2, function(x) 
+  {
+    x[is.na(x)] = median(x, na.rm = T)
+    x
+  })
+  return(result)
+}
+```
+
+#Function to calculate RMSE/NRMSE
+```{r}
+# Set norm to TRUE if you require normalization 
+# Alternative if you want to check RMSE without normalization
+Rmse <- function(imp, mis, true, norm = FALSE){
+  imp <- as.matrix(imp)
+  mis <- as.matrix(mis)
+  true <- as.matrix(true)
+  missIndex <- which(is.na(mis))
+  errvec <- imp[missIndex] - true[missIndex]
+  rmse <- sqrt(mean(errvec^2))
+  if (norm) {
+    rmse <- rmse/sd(true[missIndex])
+  }
+  return(rmse)
+}
+```
+
+#Function to calculate gPCA delta
+```{r}
+obtain_gPCAdelta <- function(df, batch){
+  out <- gPCA.batchdetect(df, batch)
+  return(out$delta)
+}
+```
+
+#Function to run PCA plot 
+```{r}
+pcaplot <- function(data, group, batch){
+  pc_res <- prcomp(data, scale = TRUE)
+  pca_data <- data.frame(Class = group, Batch = batch, X = pc_res$x[,1], Y = pc_res$x[,2])
+  pca_data['Batch'] <- as.factor(pca_data$Batch)
+  pca1 <- pca_data[pca_data$Batch == 1,]
+  pca2 <- pca_data[pca_data$Batch == 2,]
+  summary <- summary(pc_res)
+  str1 = "PC1:" 
+  str2 = "PC2:"
+  perc = "%"
+  pc1_var = round(summary$importance[2,][1]*100, 1)
+  pc2_var = round(summary$importance[2,][2]*100, 1)
+  
+  plot <- ggplot() + 
+  geom_point(data = pca1,aes(fill =Class,x=X, y=Y), pch = 21, size = 8, colour = 'black') +
+  geom_point(data = pca2,aes(fill =Class,x=X, y=Y), pch = 24, size = 8, colour = 'black') +
+ scale_fill_manual(values = c("#469B94", "#F2A83D")) + 
+  theme(axis.title = element_text(size = 18)) +
+  theme(axis.text = element_text(size = 21)) +
+  theme(legend.title = element_text(size = 15)) +
+  theme(plot.title = element_text(size = 18)) + 
+  theme(legend.position = "none") + 
+  theme(plot.title = element_blank()) + 
+  theme(panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) + 
+  xlab(paste(str1,pc1_var,perc)) + 
+  ylab(paste(str2,pc2_var,perc)) 
+  
+  return(plot)
+  print(summary)
+}  
+```
+
+#Function to perform ComBat batch correction
+```{r}
+RunComBat <- function(data, metadata, group, batch){
+bc_data <- ComBat(
+  t(data),
+  batch = as.factor(batch),
+  mod = model.matrix(~as.factor(group), data=as.data.frame(t(metadata))),
+  par.prior = TRUE,
+  prior.plots = FALSE,
+  mean.only = FALSE,
+  ref.batch = NULL,
+)
+
+return(bc_data)
+}
+
+```
+
+#### This section onwards is used to reproduce Figure 4A
+# Simulate missing values using HCC1806/HS578T DDA PASEF and dia PASEF datasets
+```{r}
+#Simulate 10,20,30,40,50% total missing proportion, where MNAR:MCAR = 2:1 in proportion 
+#mv.sim returns a list containing true dataframe with no missing values, and dataframe with simulated missing values
+
+## Simulation using HCC1806/HS578T DDA PASEF 
+B1_MVs_10 <- mv.sim(B1_data_nonNA, 0.1, 0.025)
+B1_MVs_20 <- mv.sim(B1_data_nonNA, 0.2, 0.05)
+B1_MVs_30 <- mv.sim(B1_data_nonNA, 0.3, 0.075)
+B1_MVs_40 <- mv.sim(B1_data_nonNA, 0.4, 0.1)
+B1_MVs_50 <- mv.sim(B1_data_nonNA, 0.5, 0.125)
+
+## Simulation using HCC1806/HS578T diaPASEF dataset
+B2_MVs_10 <- mv.sim(B2_data_nonNA, 0.1, 0.025)
+B2_MVs_20 <- mv.sim(B2_data_nonNA, 0.2, 0.05)
+B2_MVs_30 <- mv.sim(B2_data_nonNA, 0.3, 0.075)
+B2_MVs_40 <- mv.sim(B2_data_nonNA, 0.4, 0.1)
+B2_MVs_50 <- mv.sim(B2_data_nonNA, 0.5, 0.125)
+
+###List to store dataframes with simulated missing values 
+B1_mis_MVs_df <- list(B1_MVs_10[[2]], B1_MVs_20[[2]], B1_MVs_30[[2]], B1_MVs_40[[2]], B1_MVs_50[[2]]) # mis df from HCC1806/HS578T DDA PASEF
+B2_mis_MVs_df <- list(B2_MVs_10[[2]], B2_MVs_20[[2]], B2_MVs_30[[2]], B2_MVs_40[[2]], B2_MVs_50[[2]]) # mis df from HCC1806/HS578T diaPASEF
+
+###List to store true dataframes with no missing values 
+B1_true_MVs_df <- list(B1_MVs_10[[1]], B1_MVs_20[[1]], B1_MVs_30[[1]], B1_MVs_40[[1]], B1_MVs_50[[1]]) # true df from HCC1806/HS578T DDA PASEF
+B2_true_MVs_df <- list(B2_MVs_10[[1]], B2_MVs_20[[1]], B2_MVs_30[[1]], B2_MVs_40[[1]], B2_MVs_50[[1]]) # true df from HCC1806/HS578T diaPASEF
+```
+
+# Impute missing values on simulated datasets from both HCC1806/HS578T DDA-PASEF and diaPASEF
+```{r}
+#### Impute list containing simulated dataframes (in order of increasing total MV) with mean, median, qrilc, minprob, knn and lls 
+## for our interpretations in the paper, k is set to 5 for knn 
+
+## Imputing simulated datasets from HCC1806/HS578T DDA PASEF 
+B1_mean_impute_df <- lapply(B1_mis_MVs_df, do.impute, "mean", k =5) #mean impute 
+B1_median_impute_df <- lapply(B1_mis_MVs_df, Median_wrapper) #median impute 
+B1_qrilc_impute_df <- lapply(B1_mis_MVs_df, do.impute, "qrilc", k =5) #QRILC impute 
+B1_minprob_impute_df <- lapply(B1_mis_MVs_df, do.impute, "minprob", k =5) #MinProb impute 
+B1_knn_impute_df <- lapply(B1_mis_MVs_df, do.impute, "knn", k =5) #KNN impute 
+B1_lls_impute_df <- lapply(B1_mis_MVs_df, LLS_wrapper) #LLS impute 
+
+## Imputing simulated datasets from HCC1806/HS578T diaPASEF 
+B2_mean_impute_df <- lapply(B2_mis_MVs_df, do.impute, "mean", k =5)
+B2_median_impute_df <- lapply(B2_mis_MVs_df, Median_wrapper)
+B2_qrilc_impute_df <- lapply(B2_mis_MVs_df, do.impute, "qrilc", k =5)
+B2_minprob_impute_df <- lapply(B2_mis_MVs_df, do.impute, "minprob", k =5)
+B2_knn_impute_df <- lapply(B2_mis_MVs_df, do.impute, "knn", k =5)
+B2_lls_impute_df <- lapply(B2_mis_MVs_df, LLS_wrapper)
+```
+
+#calculate NRMSE, and construct scatter plot in order of increasing total MV
+```{r}
+## Vector to store calculated NRMSE values (imputed vs true)
+B1_mean_imp_rmse = c()
+B1_median_imp_rmse = c()
+B1_qrilc_imp_rmse = c()
+B1_minprob_imp_rmse = c()
+B1_knn_imp_rmse = c()
+B1_lls_imp_rmse = c()
+
+## Vector to store calculated NRMSE values (imputed vs true)
+B2_mean_imp_rmse = c()
+B2_median_imp_rmse = c()
+B2_qrilc_imp_rmse = c()
+B2_minprob_imp_rmse = c()
+B2_knn_imp_rmse = c()
+B2_lls_imp_rmse = c()
+
+## Calculate NRMSE for imputed datasets that are simulated from HCC1806/HS578T DDA PASEF 
+for (i in 1:5) {
+  B1_mean_rmse_val <- Rmse(B1_mean_impute_df[[i]], B1_mis_MVs_df[[i]], B1_true_MVs_df[[i]], norm = TRUE)
+  B1_mean_imp_rmse <- c(B1_mean_imp_rmse, B1_mean_rmse_val)
+  
+  B1_median_rmse_val <- Rmse(B1_median_impute_df[[i]], B1_mis_MVs_df[[i]], B1_true_MVs_df[[i]], norm = TRUE)
+  B1_median_imp_rmse <- c(B1_median_imp_rmse, B1_median_rmse_val)
+  
+  B1_qrilc_rmse_val <- Rmse(B1_qrilc_impute_df[[i]], B1_mis_MVs_df[[i]], B1_true_MVs_df[[i]], norm = TRUE)
+  B1_qrilc_imp_rmse <- c(B1_qrilc_imp_rmse, B1_qrilc_rmse_val)
+  
+  B1_minprob_rmse_val <- Rmse(B1_minprob_impute_df[[i]], B1_mis_MVs_df[[i]], B1_true_MVs_df[[i]], norm = TRUE)
+  B1_minprob_imp_rmse <- c(B1_minprob_imp_rmse, B1_minprob_rmse_val)
+  
+  B1_knn_rmse_val <- Rmse(B1_knn_impute_df[[i]], B1_mis_MVs_df[[i]], B1_true_MVs_df[[i]], norm = TRUE)
+  B1_knn_imp_rmse <- c(B1_knn_imp_rmse, B1_knn_rmse_val)
+  
+  B1_lls_rmse_val <- Rmse(B1_lls_impute_df[[i]], B1_mis_MVs_df[[i]], B1_true_MVs_df[[i]], norm = TRUE)
+  B1_lls_imp_rmse <- c(B1_lls_imp_rmse, B1_lls_rmse_val)
+}
+
+## Calculate NRMSE for imputed datasets that are simulated from HCC1806/HS578T diaPASEF 
+for (i in 1:5) {
+  B2_mean_rmse_val <- Rmse(B2_mean_impute_df[[i]], B2_mis_MVs_df[[i]], B2_true_MVs_df[[i]], norm = TRUE)
+  B2_mean_imp_rmse <- c(B2_mean_imp_rmse, B2_mean_rmse_val)
+  
+  B2_median_rmse_val <- Rmse(B2_median_impute_df[[i]], B2_mis_MVs_df[[i]], B2_true_MVs_df[[i]], norm = TRUE)
+  B2_median_imp_rmse <- c(B2_median_imp_rmse, B2_median_rmse_val)
+  
+  B2_qrilc_rmse_val <- Rmse(B2_qrilc_impute_df[[i]], B2_mis_MVs_df[[i]], B2_true_MVs_df[[i]], norm = TRUE)
+  B2_qrilc_imp_rmse <- c(B2_qrilc_imp_rmse, B2_qrilc_rmse_val)
+  
+  B2_minprob_rmse_val <- Rmse(B2_minprob_impute_df[[i]], B2_mis_MVs_df[[i]], B2_true_MVs_df[[i]], norm = TRUE)
+  B2_minprob_imp_rmse <- c(B2_minprob_imp_rmse, B2_minprob_rmse_val)
+  
+  B2_knn_rmse_val <- Rmse(B2_knn_impute_df[[i]], B2_mis_MVs_df[[i]], B2_true_MVs_df[[i]], norm = TRUE)
+  B2_knn_imp_rmse <- c(B2_knn_imp_rmse, B2_knn_rmse_val)
+  
+  B2_lls_rmse_val <- Rmse(B2_lls_impute_df[[i]], B2_mis_MVs_df[[i]], B2_true_MVs_df[[i]], norm = TRUE)
+  B2_lls_imp_rmse <- c(B2_lls_imp_rmse, B2_lls_rmse_val)
+}
+
+#### Plot scatterplot representing NRMSE values derived from simulations, in order of increasing total MV proportion
+
+## Figure for NRMSE results derived from imputation of simulated datasets (DDA-PASEF)
+B1_increasing_MV_rmse_df <- data.frame('mean' = B1_mean_imp_rmse, 'median' = B1_median_imp_rmse, "qrilc" = B1_qrilc_imp_rmse, "minprob" = B1_minprob_imp_rmse, "knn" = B1_knn_imp_rmse, "lls" = B1_lls_imp_rmse, mv_prop =  c('MV_10', 'MV_20', 'MV_30', 'MV_40', 'MV_50'))
+
+B1_increasing_MV_rmse_plot <- 
+  ggplot() + 
+  geom_point(data=melt(B1_increasing_MV_rmse_df), aes(x=mv_prop, y = value, colour = variable), size = 5) +
+  labs(title="MNAR:MCAR 2:1", x ="Total MV Proportion (%)", y = "NRMSE") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 18)) +
+  theme(axis.text = element_text(size = 14)) +
+  theme(legend.text = element_text(size = 14)) +
+  theme(plot.title = element_text(size=18)) + 
+  scale_colour_brewer(palette = "Dark2") 
+
+## Figure for NRMSE results derived from imputation of simulated datasets (diaPASEF)
+B2_increasing_MV_rmse_df <- data.frame('mean' = B2_mean_imp_rmse, 'median' = B2_median_imp_rmse, "qrilc" = B2_qrilc_imp_rmse, "minprob" = B2_minprob_imp_rmse, "knn" = B2_knn_imp_rmse, "lls" = B2_lls_imp_rmse, mv_prop =  c('MV_10', 'MV_20', 'MV_30', 'MV_40', 'MV_50'))
+
+B2_increasing_MV_rmse_plot <- 
+  ggplot() + 
+  geom_point(data=melt(B2_increasing_MV_rmse_df), aes(x=mv_prop, y = value, colour = variable), size = 5) +
+  labs(title="MNAR:MCAR 2:1", x ="Total MV Proportion (%)", y = "NRMSE") +
+  theme_bw() +
+  theme(axis.title = element_text(size = 18)) +
+  theme(axis.text = element_text(size = 14)) +
+  theme(legend.text = element_text(size = 14)) +
+  theme(plot.title = element_text(size=18)) + 
+  scale_colour_brewer(palette = "Dark2") 
+```
+
+#### This section onwards is used to reproduce Figure 4B
+## Line plot demonstrating gPCA delta values after different combinations of MVI and BEC on HCC1806/HS578T DDA-PASEF and diaPASEF
+
+## First impute both HCC1806/HS578T DDA-PASEF and diaPASEF
+## B1 = DDA-PASEF, while B2 = diaPASEF
+```{r}
+## In the paper, we imputed by KNN, Mean, MinProb, LLS and NA.omit 
+#Mean impute
+B1_data_mean <- do.impute(as.matrix(B1_data), method = "mean", k=5) 
+B2_data_mean <- do.impute(as.matrix(B2_data), method = "mean", k=5)
+
+#MinProb impute
+B1_data_minprob <- do.impute(as.matrix(B1_data), method = "minprob", k =5)
+B2_data_minprob <- do.impute(as.matrix(B2_data), method = "minprob", k =5)
+
+##KNN impute
+B1_data_knn <- B1_data[rowSums(is.na(B1_data)) != ncol(B1_data), ] #As KNN cannot take entire missing rows, remove those first in B1 dataset 
+B1_data_knn <- do.impute(as.matrix(B1_data_knn), method = "knn", k =5)
+B2_data_knn <- do.impute(as.matrix(B2_data), method = "knn", k =5)
+
+#LLS impute
+B1_data_LLS <- B1_data[rowSums(is.na(B1_data)) != ncol(B1_data), ] #As LLS cannot take entire missing rows, remove those first in B1 dataset 
+B1_data_LLS <- LLS_wrapper(B1_data_LLS)
+B2_data_LLS <- LLS_wrapper(B2_data)
+```
+
+## Standardize imputed datasets to same dimensions as the KNN imputed dataset for HCC1806/HS578T DDA-PASEF 
+## This is because we removed entire missing rows for B1 data earlier while performing KNN imputation
+```{r}
+#Standardize to same dimensions as KNN imputed data for NA.omit data 
+list_of_data = list(B1_data_knn, B1_data_nonNA)
+common_names = Reduce(intersect, lapply(list_of_data, row.names))
+list_of_data = lapply(list_of_data, function(x) { x[row.names(x) %in% common_names,] })
+B1_data_nonimpute <- data.frame(list_of_data[2])
+
+#Standardize to same dimensions as KNN imputed data for mean imputed data
+list_of_data = list(B1_data_knn, B1_data_mean)
+common_names = Reduce(intersect, lapply(list_of_data, row.names))
+list_of_data = lapply(list_of_data, function(x) { x[row.names(x) %in% common_names,] })
+B1_data_mean <- data.frame(list_of_data[2])
+
+#Standardize to same dimensions as KNN imputed data for MinProb imputed data 
+list_of_data = list(B1_data_knn, B1_data_minprob)
+common_names = Reduce(intersect, lapply(list_of_data, row.names))
+list_of_data = lapply(list_of_data, function(x) { x[row.names(x) %in% common_names,] })
+B1_data_minprob <- data.frame(list_of_data[2])
+
+#Declare new variable name for NA.omit diaPASEF data 
+B2_data_nonimpute <- B2_data_nonNA
+```
+
+## Perform different batch correction methods on all imputed datasets 
+```{r}
+#### Batch correction of HCC1806/HS578T DDA PASEF imputed datasets first 
+
+#Transform the imputed datasets and store in new variable names 
+Uncorrected_B1_nonimpute <- t(B1_data_nonimpute)
+Uncorrected_B1_minprob <- t(B1_data_minprob)
+Uncorrected_B1_knn <- t(B1_data_knn)
+Uncorrected_B1_mean <- t(B1_data_mean)
+Uncorrected_B1_LLS <- t(B1_data_LLS)
+
+#Mean centering batch correction 
+BMC_B1_nonimpute <- meancenter(as.matrix(t(B1_data_nonimpute)), B1_machine)$xadj
+BMC_B1_minprob <- meancenter(as.matrix(t(B1_data_minprob)), B1_machine)$xadj
+BMC_B1_knn <- meancenter(as.matrix(t(B1_data_knn)), B1_machine)$xadj
+BMC_B1_mean <- meancenter(as.matrix(t(B1_data_mean)), B1_machine)$xadj
+BMC_B1_LLS <- meancenter(as.matrix(t(B1_data_LLS)), B1_machine)$xadj
+
+#Median centering batch correction 
+median.adj_B1_nonimpute <- t(quickadjust.zero(as.matrix(B1_data_nonimpute), B1_machine))
+median.adj_B1_minprob <- t(quickadjust.zero(as.matrix(B1_data_minprob), B1_machine))
+median.adj_B1_knn <- t(quickadjust.zero(as.matrix(B1_data_knn), B1_machine))
+median.adj_B1_mean <- t(quickadjust.zero(as.matrix(B1_data_mean), B1_machine))
+median.adj_B1_LLS <- t(quickadjust.zero(as.matrix(B1_data_LLS), B1_machine))
+
+#ComBat correction 
+ComBat_B1_nonimpute <- t(RunComBat(t(B1_data_nonimpute), B1_metadata, B1_group, B1_machine))
+ComBat_B1_minprob <- t(RunComBat(t(B1_data_minprob),  B1_machine, B1_group, B1_machine))
+ComBat_B1_knn <- t(RunComBat(t(B1_data_knn),  B1_machine, B1_group, B1_machine))
+ComBat_B1_mean <- t(RunComBat(t(B1_data_mean),  B1_machine, B1_group,B1_machine))
+ComBat_B1_LLS <- t(RunComBat(t(B1_data_LLS),  B1_machine, B1_group, B1_machine))
+
+#Limma correction
+limma_adj_B1_nonimpute <- t(removeBatchEffect(B1_data_nonimpute, batch = B1_machine))
+limma_adj_B1_minprob <- t(removeBatchEffect(B1_data_minprob, batch =B1_machine))
+limma_adj_B1_knn <- t(removeBatchEffect(B1_data_knn, batch = B1_machine))
+limma_adj_B1_mean <- t(removeBatchEffect(B1_data_mean, batch = B1_machine))
+limma_adj_B1_LLS <- t(removeBatchEffect(B1_data_LLS, batch = B1_machine))
+
+#Store non and batch corrected dataframes in lists --> one list for each batch correction method 
+# Each list contains uncorrected and batch corrected dataframes in order of MVI methods: "NA.omit, MinProb, KNN, Mean and LLS")
+B1_uncorrected_df <- list(Uncorrected_B1_nonimpute, Uncorrected_B1_minprob, Uncorrected_B1_knn, Uncorrected_B1_mean, Uncorrected_B1_LLS)
+B1_BMC_df <- list(BMC_B1_nonimpute, BMC_B1_minprob, BMC_B1_knn, BMC_B1_mean, BMC_B1_LLS)
+B1_median_df <- list(median.adj_B1_nonimpute, median.adj_B1_minprob, median.adj_B1_knn, median.adj_B1_mean, median.adj_B1_LLS)
+B1_ComBat_df <- list(ComBat_B1_nonimpute, ComBat_B1_minprob, ComBat_B1_knn, ComBat_B1_mean, ComBat_B1_LLS) 
+B1_limma_df <- list(limma_adj_B1_nonimpute, limma_adj_B1_minprob, limma_adj_B1_knn, limma_adj_B1_mean, limma_adj_B1_LLS)
+
+#### Batch correction of the HCC1806/HS578T diaPASEF imputed datasets
+
+#Transform the imputed datasets and store in new variable names 
+Uncorrected_B2_nonimpute <- t(B2_data_nonimpute)
+Uncorrected_B2_minprob <- t(B2_data_minprob)
+Uncorrected_B2_knn <- t(B2_data_knn)
+Uncorrected_B2_mean <- t(B2_data_mean)
+Uncorrected_B2_LLS <- t(B2_data_LLS)
+
+#Mean centering batch correction
+BMC_B2_nonimpute <- meancenter(as.matrix(t(B2_data_nonimpute)), B1_machine)$xadj
+BMC_B2_minprob <- meancenter(as.matrix(t(B2_data_minprob)), B1_machine)$xadj
+BMC_B2_knn <- meancenter(as.matrix(t(B2_data_knn)), B1_machine)$xadj
+BMC_B2_mean <- meancenter(as.matrix(t(B2_data_mean)), B1_machine)$xadj
+BMC_B2_LLS <- meancenter(as.matrix(t(B2_data_LLS)), B1_machine)$xadj
+
+#Median centering batch correction 
+median.adj_B2_nonimpute <- t(quickadjust.zero(as.matrix(B2_data_nonimpute), B1_machine))
+median.adj_B2_minprob <- t(quickadjust.zero(as.matrix(B2_data_minprob), B1_machine))
+median.adj_B2_knn <- t(quickadjust.zero(as.matrix(B2_data_knn), B1_machine))
+median.adj_B2_mean <- t(quickadjust.zero(as.matrix(B2_data_mean), B1_machine))
+median.adj_B2_LLS <- t(quickadjust.zero(as.matrix(B2_data_LLS), B1_machine))
+
+#ComBat correction 
+ComBat_B2_nonimpute <- t(RunComBat(t(B2_data_nonimpute), B1_metadata, B1_group, B1_machine))
+ComBat_B2_minprob <- t(RunComBat(t(B2_data_minprob),  B1_machine, B1_group, B1_machine))
+ComBat_B2_knn <- t(RunComBat(t(B2_data_knn),  B1_machine, B1_group, B1_machine))
+ComBat_B2_mean <- t(RunComBat(t(B2_data_mean),  B1_machine, B1_group,B1_machine))
+ComBat_B2_LLS <- t(RunComBat(t(B2_data_LLS),  B1_machine, B1_group,B1_machine))
+
+#Limma correction
+limma_adj_B2_nonimpute <- t(removeBatchEffect(B2_data_nonimpute, batch = B1_machine))
+limma_adj_B2_minprob <- t(removeBatchEffect(B2_data_minprob, batch =B1_machine))
+limma_adj_B2_knn <- t(removeBatchEffect(B2_data_knn, batch = B1_machine))
+limma_adj_B2_mean <- t(removeBatchEffect(B2_data_mean, batch = B1_machine))
+limma_adj_B2_LLS <- t(removeBatchEffect(B2_data_LLS, batch = B1_machine))
+
+#Store non and batch corrected dataframes in lists --> one list for each batch correction method
+# Each list contains batch corrected dataframes in order of MVI methods: "NA.omit, MinProb, KNN, Mean and LLS")
+B2_uncorrected_df <- list(Uncorrected_B2_nonimpute, Uncorrected_B2_minprob, Uncorrected_B2_knn, Uncorrected_B2_mean, Uncorrected_B2_LLS)
+B2_BMC_df <- list(BMC_B2_nonimpute, BMC_B2_minprob, BMC_B2_knn, BMC_B2_mean, BMC_B2_LLS)
+B2_median_df <- list(median.adj_B2_nonimpute, median.adj_B2_minprob, median.adj_B2_knn, median.adj_B2_mean, median.adj_B2_LLS)
+B2_ComBat_df <- list(ComBat_B2_nonimpute, ComBat_B2_minprob, ComBat_B2_knn, ComBat_B2_mean, ComBat_B2_LLS) 
+B2_limma_df <- list(limma_adj_B2_nonimpute, limma_adj_B2_minprob, limma_adj_B2_knn, limma_adj_B2_mean, limma_adj_B2_LLS)
+```
+
+## Quantify gPCA delta values and generate line plot 
+```{r}
+###gPCA delta to quantify batch effects for results derived from HCC1806/HS578T DDA PASEF datasets 
+B1_uncorrected_res <- data.frame('Uncorrected' = unlist(lapply(B1_uncorrected_df, obtain_gPCAdelta, B1_machine)))
+B1_BMC_res <- data.frame('BMC' = unlist(lapply(B1_BMC_df, obtain_gPCAdelta, B1_machine)))
+B1_median_res <- data.frame('Median' = unlist(lapply(B1_median_df, obtain_gPCAdelta, B1_machine)))
+B1_ComBat_res <- data.frame('ComBat' = unlist(lapply(B1_ComBat_df, obtain_gPCAdelta, B1_machine)))
+B1_limma_res <- data.frame('limma' = unlist(lapply(B1_limma_df, obtain_gPCAdelta, B1_machine)))
+
+###Line plot 
+# Imputation methods in order of how they were stored in the list above
+imputation_methods <- c('NA.omit', 'MinProb', 'KNN', 'Mean', 'LLS')
+
+#Store gPCA delta results for each batch correction methods in order of the imputation methods
+B1_MVI_BECA_res <- data.frame('Uncorrected' = B1_uncorrected_res$Uncorrected, 'BMC' = B1_BMC_res$BMC, 'Median' = B1_median_res$Median, 'ComBat' = B1_ComBat_res$ComBat, 'limma' = B1_limma_res$limma, 'Imputation' = imputation_methods)
+
+B1_MVI_BECA_na.omit <- B1_MVI_BECA_res[1,]
+B1_MVI_BECA_minprob <- B1_MVI_BECA_res[2,]
+B1_MVI_BECA_KNN <- B1_MVI_BECA_res[3,]
+B1_MVI_BECA_mean <- B1_MVI_BECA_res[4,]
+B1_MVI_BECA_LLS <- B1_MVI_BECA_res[5,]
+
+B1_MVI_BECA_line_plot <- ggplot() + geom_line(data=melt(B1_MVI_BECA_na.omit), aes(x=variable, y = value, group = Imputation), color= "red", size = 1.5) + 
+  geom_line(data=melt(B1_MVI_BECA_minprob), aes(x=variable, y = value, group = Imputation), color = "blue", size = 1.5) + 
+  geom_line(data=melt(B1_MVI_BECA_KNN, group = Imputation), aes(x=variable, y = value, group = Imputation), color = "green", size = 1.5) +
+  geom_line(data=melt(B1_MVI_BECA_mean, group = Imputation), aes(x=variable, y = value, group = Imputation), color = "orange", size = 1.5) +
+  geom_line(data=melt(B1_MVI_BECA_LLS, group = Imputation), aes(x=variable, y = value, group = Imputation), color = "black", size = 1.5) 
+
+
+###gPCA delta to quantify batch effects for results derived from HCC1806/HS578T DDA PASEF datasets 
+B2_uncorrected_res <- data.frame('Uncorrected' = unlist(lapply(B2_uncorrected_df, obtain_gPCAdelta, B1_machine)))
+B2_BMC_res <- data.frame('BMC' = unlist(lapply(B2_BMC_df, obtain_gPCAdelta, B1_machine)))
+B2_median_res <- data.frame('Median' = unlist(lapply(B2_median_df, obtain_gPCAdelta, B1_machine)))
+B2_ComBat_res <- data.frame('ComBat' = unlist(lapply(B2_ComBat_df, obtain_gPCAdelta, B1_machine)))
+B2_limma_res <- data.frame('limma' = unlist(lapply(B2_limma_df, obtain_gPCAdelta, B1_machine)))
+
+#Store gPCA delta results for each batch correction methods in order of the imputation methods
+B2_MVI_BECA_res <- data.frame('Uncorrected' = B2_uncorrected_res$Uncorrected, 'BMC' = B2_BMC_res$BMC, 'Median' = B2_median_res$Median, 'ComBat' = B2_ComBat_res$ComBat, 'limma' = B2_limma_res$limma, 'Imputation' = imputation_methods)
+
+B2_MVI_BECA_na.omit <- B2_MVI_BECA_res[1,]
+B2_MVI_BECA_minprob <- B2_MVI_BECA_res[2,]
+B2_MVI_BECA_KNN <- B2_MVI_BECA_res[3,]
+B2_MVI_BECA_mean <- B2_MVI_BECA_res[4,]
+B2_MVI_BECA_LLS <- B2_MVI_BECA_res[5,]
+
+B2_MVI_BECA_line_plot <- ggplot() + geom_line(data=melt(B2_MVI_BECA_na.omit), aes(x=variable, y = value, group = Imputation), color= "red", size = 1.5) + 
+  geom_line(data=melt(B2_MVI_BECA_minprob), aes(x=variable, y = value, group = Imputation), color = "blue", size = 1.5) + 
+  geom_line(data=melt(B2_MVI_BECA_KNN, group = Imputation), aes(x=variable, y = value, group = Imputation), color = "green", size = 1.5) +
+  geom_line(data=melt(B2_MVI_BECA_mean, group = Imputation), aes(x=variable, y = value, group = Imputation), color = "orange", size = 1.5) +
+  geom_line(data=melt(B2_MVI_BECA_LLS, group = Imputation), aes(x=variable, y = value, group = Imputation), color = "black", size = 1.5)
+
+B2_MVI_BECA_line_plot
+```
+
+#### This section is used to reproduce Figure 4C
+## PCA scatterplot of ComBat batch corrected HCC1806/HS578T DDA-PASEF
+## B1 = DDA-PASEF, while B2 = diaPASEF
+
+```{r}
+#Perform ComBat batch correction on HCC1806/HS578T DDA-PASEF and diaPASEF
+B1_ComBat <- RunComBat(t(B1_data_nonNA), B1_metadata, B1_group, B1_machine) #DDA PASEF
+B2_ComBat <- RunComBat(t(B2_data_nonNA), B1_metadata, B1_group, B1_machine) #diaPASEF
+
+#PCA plot on HCC1806/HS578T DDA-PASEF and diaPASEF
+pca_ComBat_B1 <- pcaplot(t(B1_ComBat), B1_group, B1_machine) #PCA for DDA PASEF
+pca_ComBat_B2 <- pcaplot(t(B2_ComBat), B1_group, B1_machine) #PCA for diaPASEF
+```
+
+

@@ -1,0 +1,363 @@
+---
+title: "redo_scientific_data_plots"
+output: html_document
+date: "2023-03-05"
+---
+
+#### This markdown can be used to reproduce the benchmark plots
+## Here, we refer each protein matrix dataset as A1, A2, B1 and B2 
+## Batch factors and class factors are the same for each cell line pair, so we use metadata from DDA PASEF data for diaPASEF data as well
+
+## A1 = A549/K562 DDA-PASEF 
+## A2 = A549/K562 diaPASEF 
+## B1 = HCC1806/HS578T DDA PASEF 
+## B2 = HCC1806/HS578T diaPASEF
+
+
+## Libraries
+```{r}
+library(reshape2)
+library(tidyverse)
+library(proBatch)
+library(sva)
+library(visdat)
+```
+
+#### Read the A549/K562 datasets 
+```{r}
+setwd('') #input working directory for stored data
+
+#Read A549/K562 DDA PASEF data 
+A1_data <- read.csv('protein_matrix_DDA_A549_K562.csv', header = TRUE, row.names = 1)
+#Read A549/K562 diaPASEF data
+A2_data <- read.csv('protein_matrix_DIA_A549_K562.csv', header = TRUE, row.names = 1)
+
+#Read metadata 
+A1_metadata <- read.csv('metadata_DDA_A549_K562.csv', header = TRUE)
+A1_sampleannotation <- read.csv('sampleannotation_DDA_A549_K562.csv', header = TRUE) #metadata for pvca function
+
+#Declare factors 
+A1_group <- as.factor(A1_metadata$class) #class factor 
+A1_machine <- as.factor(A1_metadata$machine) #batch factor 
+
+#Omit missing value (for use in PCA and PVCA later)
+A1_data_nonNA <- na.omit(A1_data) #drop proteins containing missing values in A549/K562 DDA PASEF data 
+A2_data_nonNA <- na.omit(A2_data) #drop proteins containing missing values in A549/K562 diaPASEF data
+```
+
+#### Read the HCC1806/HS578T datasets 
+```{r}
+#Read HCC1806/HS578T DDA PASEF data
+B1_data <- read.csv('protein_matrix_DDA_HCC1806_HS578T.csv', header = TRUE, row.names = 1)
+
+#Read HCC1806/HS578T diaPASEF data
+B2_data <- read.csv('protein_matrix_DIA_HCC1806_HS578T.csv', header = TRUE, row.names = 1)
+
+#Read metadata
+B1_metadata <- read.csv('metadata_DDA_HCC1806_HS578T.csv', header = TRUE)
+B1_sampleannotation <- read.csv('sampleannotation_DDA_HCC1806_HS578T.csv', header = TRUE) #metadata for pvca function
+
+#Declare factors 
+B1_group <- as.factor(B1_metadata$class) #class factor 
+B1_machine <- as.factor(B1_metadata$machine) #batch factor 
+
+#Omit missing value (for use in PCA and PVCA later)
+B1_data_nonNA <- na.omit(B1_data) #drop proteins containing missing values in HCC1806/HS578T DDA PASEF data 
+B2_data_nonNA <- na.omit(B2_data) #drop proteins containing missing values in HCC1806/HS578T diaPASEF data 
+```
+
+#Create class specific, batch specfic dataframes for each dataset
+```{r}
+#A549/K562 datasets 
+A549_CAD_A1 <- A1_data[,1:12]
+K562_CAD_A1 <- A1_data[,13:24]
+A549_N_A1 <- A1_data[,25:36]
+K562_N_A1 <- A1_data[,37:48]
+
+A549_CAD_A2 <- A2_data[,1:12]
+K562_CAD_A2 <- A2_data[,13:24]
+A549_N_A2 <- A2_data[,25:36]
+K562_N_A2 <- A2_data[,37:48]
+
+#HCC1806/HS578T datasets 
+HCC1806_CAD_B1 <- B1_data[,1:9]
+HS578T_CAD_B1 <- B1_data[,10:18]
+HCC1806_N_B1 <- B1_data[,19:27]
+HS578T_N_B1 <- B1_data[,28:36]
+
+HCC1806_CAD_B2 <- B2_data[,1:9]
+HS578T_CAD_B2 <- B2_data[,10:18]
+HCC1806_N_B2 <- B2_data[,19:27]
+HS578T_N_B2 <- B2_data[,28:36]
+```
+
+# Arrange dataframe by class
+```{r}
+A1_data_ordered <- cbind(A1_data[,1:12], A1_data[25:36], A1_data[,13:24], A1_data[,37:48])
+A2_data_ordered <- cbind(A2_data[,1:12], A2_data[25:36], A2_data[,13:24], A2_data[,37:48])
+B1_data_ordered <- cbind(B1_data[,1:9], B1_data[19:27], B1_data[,10:18], B1_data[,28:36])
+B2_data_ordered <- cbind(B2_data[,1:9], B2_data[19:27], B2_data[,10:18], B2_data[,28:36])
+```
+
+## Visualise violin plot representing missing proportions of samples categorised by class and batch 
+```{r}
+#Function to count missing proportion in each of the samples 
+count_na_func <- function(x) sum(is.na(x)/length(x)) 
+
+#Function for violin plot representing missing proportion of samples categorised by class and batch
+mv_violin_plot <- function(sample_na_count){ 
+
+NA_violin_plot <- ggplot(melt(sample_na_count), aes(x=variable, y=value, fill = variable)) + 
+  geom_violin(size = 0.5) + 
+ # geom_boxplot(width = 0.2, size = 1, outlier.size = 0.8) +
+  scale_fill_manual(values = c("#469B94", "#469B94", "#F2A83D", "#F2A83D")) + 
+  theme_bw() +
+  theme(legend.position = "none") + 
+  ylab('Missing Value Proportion (%)') +
+  xlab('Class (Batch)') + 
+  ggtitle('A549/K562 DDA') + 
+  theme(plot.title = element_text(size = 21),axis.title.x=element_text(size = 21),axis.title.y=element_text(size = 21)) +
+  theme(axis.text.x = element_text(size = 21)) +
+  theme(axis.text.y = element_text(size = 21)) +
+  theme(axis.title = element_blank()) 
+  
+return(NA_violin_plot)
+}
+
+#### Count NA of datasets 
+sample_Na_count_A1 <- round(apply(t(A1_data_ordered), 1, count_na_func), digit = 5) #Count missing proportion in A549/K562 DDA PASEF dataset 
+sample_Na_count_A2 <- round(apply(t(A2_data_ordered), 1, count_na_func), digit = 5) #Count missing proportion in A549/K562 diaPASEF dataset 
+sample_Na_count_B1 <- round(apply(t(B1_data_ordered), 1, count_na_func), digit = 5) #Count missing proportion in HCC1806/HS578T DDA PASEF dataset 
+sample_Na_count_B2 <- round(apply(t(B2_data_ordered), 1, count_na_func), digit = 5) #Count missing proportion in HCC1806/HS578T diaPASEF dataset 
+
+####Categorise by class and batch for each dataset's sample NA count and store in dataframe 
+# A549/K562 DDA PASEF dataset 
+A1_Na_df_forviol <- data.frame('A549 CAD' = sample_Na_count_A1[1:12], 'A549 N' = sample_Na_count_A1[13:24], 'K562 CAD'= sample_Na_count_A1[25:36], 'K562 N' = sample_Na_count_A1[37:48])
+
+# A549/K562 diaPASEF dataset 
+A2_Na_df_forviol <- data.frame('A549 CAD' = sample_Na_count_A2[1:12], 'A549 N' = sample_Na_count_A2[13:24], 'K562 CAD'= sample_Na_count_A2[25:36], 'K562 N' = sample_Na_count_A2[37:48])
+
+# HCC1806/HS578T DDA PASEF dataset 
+B1_Na_df_forviol <- data.frame("HCC1806 CAD" = sample_Na_count_B1[1:9], "HCC1806 N" = sample_Na_count_B1[10:18], "HS578T CAD" = sample_Na_count_B1[19:27], "HS578T N" = sample_Na_count_B1[28:36])
+
+# HCC1806/HS578T diaPASEF dataset 
+B2_Na_df_forviol <- data.frame("HCC1806 CAD" = sample_Na_count_B2[1:9], "HCC1806 N" = sample_Na_count_B2[10:18], "HS578T CAD" = sample_Na_count_B2[19:27], "HS578T N" = sample_Na_count_B2[28:36])
+
+
+#### Violin GGPLOT
+# A549/K562 DDA PASEF dataset 
+mv_violin_plot(A1_Na_df_forviol)
+
+# A549/K562 diaPASEF dataset 
+mv_violin_plot(A2_Na_df_forviol)
+
+# HCC1806/HS578T DDA PASEF dataset
+mv_violin_plot(B1_Na_df_forviol)
+
+# HCC1806/HS578T diaPASEF dataset 
+mv_violin_plot(B2_Na_df_forviol)
+```
+
+#Visualise missing value heatmap 
+```{r}
+## GGPLOT missing values
+heatmap_A1 <- vis_miss(A1_data_ordered) + #009BF0", "#C81E27
+  scale_fill_manual(values = c('#2C4F8B', '#FD7D79')) +
+  ylab('Genes') + 
+  theme(axis.text.x = element_text(size = 14, angle = 0)) +  
+  theme(axis.text.y = element_text(size = 10)) +
+  theme(axis.title = element_text(size = 14)) 
+
+heatmap_A2 <- vis_miss(A2_data_ordered) + #009BF0", "#C81E27
+  scale_fill_manual(values = c('#2C4F8B', '#FD7D79')) +
+  ylab('Genes') + 
+  theme(axis.text.x = element_text(size = 14, angle = 0)) +  
+  theme(axis.text.y = element_text(size = 10)) +
+  theme(axis.title = element_text(size = 14)) 
+
+heatmap_B1 <- vis_miss(B1_data_ordered) + #009BF0", "#C81E27
+  scale_fill_manual(values = c('#2C4F8B', '#FD7D79')) +
+  ylab('Genes') + 
+  theme(axis.text.x = element_text(size = 14, angle = 0)) +  
+  theme(axis.text.y = element_text(size = 10)) +
+  theme(axis.title = element_text(size = 14)) 
+
+heatmap_B2 <- vis_miss(B2_data_ordered) + #009BF0", "#C81E27
+  scale_fill_manual(values = c('#2C4F8B', '#FD7D79')) +
+  ylab('Genes') + 
+  theme(axis.text.x = element_text(size = 14, angle = 0)) +  
+  theme(axis.text.y = element_text(size = 10)) +
+  theme(axis.title = element_text(size = 14)) 
+```
+
+
+#Functions to visualise scatterplots displaying missing rates of proteins ordered by mean log2 intensity
+```{r}
+#### Function for scatterplot dataframe 
+#Obtain mean intensity for each gene
+mv_scatter_plot <- function(data){
+mean.log2 <-data %>% apply(1, FUN = mean, na.rm = TRUE) %>% c()
+
+#Bind mean intensity to existing df 
+data_mean.log2 <-data
+data_mean.log2<-cbind(data_mean.log2,mean.log2)
+
+#Sort based on log2intensity | Obtain % missingness | Build scatter df object 
+sorted.newdf<-data_mean.log2[order(mean.log2, decreasing =T),]
+missingness<-c(rep(0,nrow(data)))
+sorted.newdf<-cbind(sorted.newdf,missingness)
+for (i in 1:nrow(sorted.newdf)){
+  msp<-round((length(which(is.na(sorted.newdf[i,])))/ncol(sorted.newdf))*100,2)
+  sorted.newdf[i,'missingness']<-msp
+}
+scatter.df<-sorted.newdf[,(length(sorted.newdf)-1):length(sorted.newdf)]
+
+#### GGplot function for scatter dataframe
+mis_prop_plot <- ggplot(as.data.frame(scatter.df),aes(x=mean.log2,y=missingness))+
+  geom_point(size=2,colour='#2C4F8B')+
+  labs(title='MV distribution',x='mean log2 protein intensity',y='missing%')+
+ # geom_vline(xintercept=median(mean.log2),linetype='longdash')+
+  #geom_hline(yintercept=50,linetype='longdash')+
+  theme_bw() +
+  theme(plot.title = element_text(size = 21),axis.title.x=element_text(size = 21),axis.title.y=element_text(size = 21)) +
+  theme(axis.text.x = element_text(size = 21)) +
+  theme(axis.text.y = element_text(size = 21)) +
+  theme(axis.title = element_blank())
+
+return(mis_prop_plot)
+}
+```
+
+## Visualise scatterplot displaying missing rates of proteins ordered by mean log2 intensity 
+```{r}
+## Plot for A549/K562 DDA PASEF 
+mv_scatter_plot(A1_data)
+
+## Plot for A549/K562 diaPASEF 
+mv_scatter_plot(A2_data)
+
+## Plot for HCC1806/HS578T DDA PASEF 
+mv_scatter_plot(B1_data)
+
+## Plot for HCC1806/HS578T diaPASEF 
+mv_scatter_plot(B2_data)
+```
+
+## Visualise scatterplots demonstrating mean intensities of samples 
+```{r}
+## Sample mean intensity dataframe for A549/K562 DDA PASEF 
+A1_sample_mean_intensity <- data.frame("mean.intensity" = rowMeans(t(na.omit(A1_data)))) #Calculate mean intensity of samples 
+A1_sample_mean_df <- data.frame('var' = row.names(A1_sample_mean_intensity), "mean_intensity" = A1_sample_mean_intensity, "class" = factor(A1_group), "batch" = factor(A1_machine))
+
+## Sample mean intensity dataframe for A549/K562 diaPASEF 
+A2_sample_mean_intensity <- data.frame("mean.intensity" = rowMeans(t(na.omit(A2_data))))
+A2_sample_mean_df <- data.frame('var' = row.names(A2_sample_mean_intensity), "mean_intensity" = A2_sample_mean_intensity, "class" = factor(A1_group), "batch" = factor(A1_machine))
+
+## Sample mean intensity dataframe for HCC1806/HS578T DDA PASEF 
+B1_sample_mean_intensity <- data.frame("mean.intensity" = rowMeans(t(na.omit(B1_data))))
+B1_sample_mean_df <- data.frame('var' = row.names(B1_sample_mean_intensity), "mean_intensity" = B1_sample_mean_intensity, "class" = factor(B1_group), "batch" = factor(B1_machine))
+
+## Sample mean intensity dataframe for HCC1806/HS578T diaPASEF 
+B2_sample_mean_intensity <- data.frame("mean.intensity" = rowMeans(t(na.omit(B2_data))))
+B2_sample_mean_df <- data.frame('var' = row.names(B2_sample_mean_intensity), "mean_intensity" = B2_sample_mean_intensity, "class" = factor(B1_group), "batch" = factor(B1_machine))
+
+### Function for sample mean intensity plot
+sample_mean_intensity_plot <- function(mean_intensity_df){
+sample_mean_plot <- ggplot(data = mean_intensity_df, aes(x = factor(rownames(mean_intensity_df), levels = rownames(mean_intensity_df)), y = mean.intensity, color = class, shape = batch)) + 
+  geom_point(size = 5) + 
+  scale_color_manual(values = c("#009E94","#FFA507")) + 
+  theme_bw() +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  theme(legend.position = "none") 
+
+return(sample_mean_plot)
+}
+
+## Plot for A549/K562 DDA PASEF 
+sample_mean_intensity_plot(A1_sample_mean_df)
+
+## Plot for A549/K562 diaPASEF 
+sample_mean_intensity_plot(A2_sample_mean_df)
+
+## Plot for HCC1806/HS578T DDA PASEF 
+sample_mean_intensity_plot(B1_sample_mean_df)
+
+## Plot for HCC1806/HS578T diaPASEF 
+sample_mean_intensity_plot(B2_sample_mean_df)
+```
+
+## PCA plot for batch effects 
+```{r}
+pcaplot <- function(data, group, batch){
+  pc_res <- prcomp(data, scale = TRUE)
+  pca_data <- data.frame(Class = group, Batch = batch, X = pc_res$x[,1], Y = pc_res$x[,2])
+  pca_data['Batch'] <- as.factor(pca_data$Batch)
+  pca1 <- pca_data[pca_data$Batch == 1,]
+  pca2 <- pca_data[pca_data$Batch == 2,]
+  summary <- summary(pc_res)
+  str1 = "PC1:" 
+  str2 = "PC2:"
+  perc = "%"
+  pc1_var = round(summary$importance[2,][1]*100, 1)
+  pc2_var = round(summary$importance[2,][2]*100, 1)
+  
+  plot <- ggplot() + 
+  geom_point(data = pca1,aes(fill =Class,x=X, y=Y), pch = 21, size = 8, colour = 'black') +
+  geom_point(data = pca2,aes(fill =Class,x=X, y=Y), pch = 24, size = 8, colour = 'black') +
+ scale_fill_manual(values = c("#469B94", "#F2A83D")) + 
+  theme(axis.title = element_text(size = 18)) +
+  theme(axis.text = element_text(size = 21)) +
+  theme(legend.title = element_text(size = 15)) +
+  theme(plot.title = element_text(size = 18)) + 
+  theme(legend.position = "none") + 
+  theme(plot.title = element_blank()) + 
+  theme(panel.grid.minor = element_blank(), panel.background = element_blank(), axis.line = element_line(colour = "black")) + 
+  xlab(paste(str1,pc1_var,perc)) + 
+  ylab(paste(str2,pc2_var,perc)) 
+  
+  return(plot)
+  print(summary)
+}  
+
+#PCA plot for A549/K562 DDA PASEF 
+pca_A1 <- pcaplot(t(A1_data_nonNA), A1_group, A1_machine) #provide na.omit dataframes with class and batch factors 
+
+#PCA plot for A549/K562 diaPASEF 
+pca_A2 <- pcaplot(t(A2_data_nonNA), A1_group, A1_machine) #provide na.omit dataframes with class and batch factors 
+
+#PCA plot for HCC1806/HS578T DDA PASEF  
+pca_B1 <- pcaplot(t(B1_data_nonNA), B1_group, B1_machine) #provide na.omit dataframes with class and batch factors 
+
+#PCA plot for HCC1806/HS578T diaPASEF  
+pca_B2 <- pcaplot(t(B2_data_nonNA), B1_group, B1_machine) #provide na.omit dataframes with class and batch factors 
+
+pca_combined <- ggarrange(pca_A1, pca_A2,pca_B1, pca_B2,
+          ncol = 2, nrow = 2)
+```
+
+## PVCA plot for batch effects 
+```{r}
+pvca_plot <- function(data, sample_annotation_meta){ #for this function, use the sample_annotation declared earlier as metadata instead
+  pvca_df_res <- prepare_PVCA_df(data, sample_annotation_meta, 
+  technical_factors = c("machine"),
+  biological_factors = c("class"), 
+  pca_threshold = .6, variance_threshold = .01, fill_the_missing = -1)
+  colors_for_bars = c('gray1', '#2C4F8B','gray90','#FD7D79')
+  names(colors_for_bars) = c('residual', 'biological','biol:techn','technical')
+  pvcaplot <- plot_PVCA.df(pvca_df_res, colors_for_bars) + ylim(0,1)
+  
+return(pvcaplot)
+}
+
+#Plot for A549/K562 DDA PASEF 
+pvca_plot(A1_data, A1_sampleannotation)
+
+#Plot for A549/K562 diaPASEF 
+pvca_plot(A2_data, A1_sampleannotation)
+
+#Plot for HCC1806/HS578T DDA PASEF 
+pvca_plot(B1_data, B1_sampleannotation)
+
+#Plot for HCC1806/HS578T diaPASEF 
+pvca_plot(B2_data, B1_sampleannotation)
+```
