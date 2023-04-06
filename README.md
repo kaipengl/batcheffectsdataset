@@ -12,7 +12,7 @@ usagenotes.Rmd: to regenerate the case study figures in the usage notes section
 protein_matrix_DDA_A549_K562.csv: protein matrix csv for A549/K562 cell line DDA-PASEF dataset \
 protein_matrix_DIA_A549_K562.csv: protein matrix csv for A549/K562 cell line diaPASEF dataset \
 metadata_DDA_A549_K562.csv: metadata for A549/K562 datasets (class and batch factors of samples) \
-sampleannotation_DDA_A549_K562.csv: metadata for A549/K562 datasets, formatted for "ProBatch" package based plots \
+sampleannotation_DDA_A549_K562.csv: metadata for A549/K562 datasets, formatted for "ProBatch" package based plots 
 
 protein_matrix_DDA_HCC1806_HS578T.csv: protein matrix csv for HCC1806/HS578T cell line DDA-PASEF dataset \
 protein_matrix_DIA_HCC1806_HS578T.csv: protein matrix csv for HCC1806/HS578T cell line diaPASEF dataset \
