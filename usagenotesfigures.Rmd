@@ -329,7 +329,7 @@ B1_increasing_MV_rmse_df <- data.frame('mean' = B1_mean_imp_rmse, 'median' = B1_
 B1_increasing_MV_rmse_plot <- 
   ggplot() + 
   geom_point(data=melt(B1_increasing_MV_rmse_df), aes(x=mv_prop, y = value, colour = variable), size = 5) +
-  labs(title="MNAR:MCAR 2:1", x ="Total MV Proportion (%)", y = "NRMSE") +
+  labs(title="MNAR:MCAR 3:1", x ="Total MV Proportion (%)", y = "NRMSE") +
   theme_bw() +
   theme(axis.title = element_text(size = 18)) +
   theme(axis.text = element_text(size = 14)) +
@@ -343,7 +343,7 @@ B2_increasing_MV_rmse_df <- data.frame('mean' = B2_mean_imp_rmse, 'median' = B2_
 B2_increasing_MV_rmse_plot <- 
   ggplot() + 
   geom_point(data=melt(B2_increasing_MV_rmse_df), aes(x=mv_prop, y = value, colour = variable), size = 5) +
-  labs(title="MNAR:MCAR 2:1", x ="Total MV Proportion (%)", y = "NRMSE") +
+  labs(title="MNAR:MCAR 3:1", x ="Total MV Proportion (%)", y = "NRMSE") +
   theme_bw() +
   theme(axis.title = element_text(size = 18)) +
   theme(axis.text = element_text(size = 14)) +
