@@ -213,7 +213,7 @@ return(bc_data)
 #### This section onwards is used to reproduce Figure 4A
 # Simulate missing values using HCC1806/HS578T DDA PASEF and dia PASEF datasets
 ```{r}
-#Simulate 10,20,30,40,50% total missing proportion, where MNAR:MCAR = 2:1 in proportion 
+#Simulate 10,20,30,40,50% total missing proportion, where MNAR:MCAR = 3:1 in proportion 
 #mv.sim returns a list containing true dataframe with no missing values, and dataframe with simulated missing values
 
 ## Simulation using HCC1806/HS578T DDA PASEF 
